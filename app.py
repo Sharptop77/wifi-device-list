@@ -1,0 +1,157 @@
+from routeros_api import RouterOsApiPool
+from flask import Flask, render_template_string
+import os
+import argparse
+import threading
+import time
+
+merged = []  # здесь будут храниться актуальные данные
+
+def update_data(args):
+    global merged
+    while True:
+        try:
+            pool1 = RouterOsApiPool(args.dhcp_host, username=args.dhcp_user, password=args.dhcp_pass, plaintext_login=True)
+            api1 = pool1.get_api()
+            dhcp_data = get_dhcp_leases(api1)
+            pool2 = RouterOsApiPool(args.capsman_host, username=args.capsman_user, password=args.capsman_pass, plaintext_login=True)
+            api2 = pool2.get_api()
+            capsman_data = get_capsman_info(api2)
+            pool1.disconnect()
+            pool2.disconnect()
+            merged = merge_data(dhcp_data, capsman_data)
+        except Exception as e:
+            print(f"Error updating  {e}")
+        time.sleep(args.update_interval)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="MikroTik WiFi Info App")
+    parser.add_argument('--dhcp-host', default=os.getenv('DHCP_MIKROTIK_HOST'))
+    parser.add_argument('--dhcp-user', default=os.getenv('DHCP_MIKROTIK_USER'))
+    parser.add_argument('--dhcp-pass', default=os.getenv('DHCP_MIKROTIK_PASS'))
+
+    parser.add_argument('--capsman-host', default=os.getenv('CAPSMAN_MIKROTIK_HOST'))
+    parser.add_argument('--capsman-user', default=os.getenv('CAPSMAN_MIKROTIK_USER'))
+    parser.add_argument('--capsman-pass', default=os.getenv('CAPSMAN_MIKROTIK_PASS'))
+    parser.add_argument('--update-interval', type=int, default=int(os.getenv('UPDATE_INTERVAL', '30')), help='Update interval in seconds')
+    args = parser.parse_args()
+    # Проверим обязательные параметры
+    if not all([args.dhcp_host, args.dhcp_user, args.dhcp_pass,
+                args.capsman_host, args.capsman_user, args.capsman_pass]):
+        parser.error("Missing MikroTik connection parameters.")
+    return args
+
+
+# Получаем данные с DHCP сервера
+def get_dhcp_leases(connection):
+    dhcp_resource = connection.get_resource('/ip/dhcp-server/lease')
+    leases = dhcp_resource.get()
+    # Вернем словарь по mac адресам с инфо
+    result = {}
+    for lease in leases:
+        # В lease есть 'address', 'mac-address', 'host-name'
+        mac = lease.get('mac-address')
+        result[mac] = {
+            'device_name': lease.get('host-name'),
+            'ip_address': lease.get('address'),
+            'mac': mac
+        }
+    return result
+
+# Получаем данные с CAPsMAN контроллера (назначение клиентов к точкам доступа)
+def get_capsman_info(connection):
+    # Получим список клиентов capsman
+    capsman_clients_res = connection.get_resource('/caps-man/registration-table')
+    clients = capsman_clients_res.get()
+    # Получим список интерфейсов точек доступа для сопоставления
+    capsman_interface_res = connection.get_resource('/caps-man/radio')
+    wireless_regs = capsman_interface_res.get()
+    # Для каждого клиента получим mac, интерфейс подключения (AP)
+    capsman_points_res = connection.get_resource('/caps-man/remote-cap')
+    wireless_aps = capsman_points_res.get()
+    radio_info = {ap['interface']: ap for ap in wireless_regs}
+    ap_info = {ap['identity']: ap for ap in wireless_aps}
+    
+    client_info = {}
+    for client in clients:
+        mac = client.get('mac-address')
+        ap_interface = client.get('interface')
+        ssid = client.get('ssid')
+        signal = client.get('rx-signal')
+        # Найдем инфо по точке доступа (ап)
+        ap_name = radio_info[ap_interface].get('remote-cap-identity')  # обычно имя интерфейса указывает точку доступа
+        ap_addr = ap_info[ap_name].get('address')
+        client_info[mac] = {
+            'ap_interface': ap_interface,
+            'ap_name': ap_name,
+            'ap_address': ap_addr,
+            'ap_ssid': ssid,
+            'ap_signal': signal
+        }
+    return client_info
+
+# Объединение данных
+def merge_data(dhcp_data, capsman_data):
+    merged_list = []
+    for mac, capsman in capsman_data.items():
+        dhcp = dhcp_data.get(mac, {})
+        merged_list.append({
+            'device_name': dhcp.get('device_name', ''),
+            'ip_address': dhcp.get('ip_address', ''),
+            'mac': mac,
+            'ap_interface': capsman.get('ap_interface', ''),
+            'ap_ssid': capsman.get('ap_ssid', ''),
+            'ap_signal': capsman.get('ap_signal', ''),
+            'ap_name': capsman.get('ap_name', ''),
+            'ap_address': capsman.get('ap_address', ''),
+        })
+    return merged_list
+
+# Запуск API и Flask сервера
+def main():
+    args = parse_args()
+
+    update_thread = threading.Thread(target=update_data, args=(args,), daemon=True)
+    update_thread.start()
+
+    app = Flask(__name__)
+
+    @app.route('/')
+    def index():
+        html = '''
+        <html><head><title>WiFi Clients</title></head>
+        <body>
+        <h2>Подключенные устройства по WiFi</h2>
+        <table border="1" cellpadding="5">
+            <tr>
+                <th>Название устройства</th>
+                <th>IP адрес</th>
+                <th>MAC адрес</th>
+                <th>Интерфейс точки доступа</th>
+                <th>SSID</th>
+                <th>Уровень приема устройства</th>
+                <th>Точка доступа (название)</th>
+                <th>Адрес точки доступа</th>
+            </tr>
+            {% for item in data %}
+            <tr>
+                <td>{{ item.device_name }}</td>
+                <td>{{ item.ip_address }}</td>
+                <td>{{ item.mac }}</td>
+                <td>{{ item.ap_interface }}</td>
+                <td>{{ item.ap_ssid }}</td>
+                <td>{{ item.ap_signal }}</td>
+                <td>{{ item.ap_name }}</td>
+                <td>{{ item.ap_address }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        </body></html>
+        '''
+        return render_template_string(html, data=merged)
+
+    app.run(host='0.0.0.0', port=8080)
+
+if __name__ == '__main__':
+    main()
+

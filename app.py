@@ -3,19 +3,20 @@ from flask import Flask, render_template_string
 import os
 import argparse
 import threading
-import signal
 import sys
 import time
 
 merged = []  # здесь будут храниться актуальные данные
+lock = threading.Lock()
 
-def update_data(api1,api2,update_interval):
+def periodic_update(api1, api2, update_interval):
     global merged
     while True:
         try:
             dhcp_data = get_dhcp_leases(api1)
             capsman_data = get_capsman_info(api2)
-            merged = merge_data(dhcp_data, capsman_data)
+            with lock:
+                merged[:] = merge_data(dhcp_data, capsman_data)  # правильно обновлять весь список
         except Exception as e:
             print(f"Error updating  {e}")
         time.sleep(update_interval)
@@ -111,22 +112,15 @@ def main():
     pool2 = RouterOsApiPool(args.capsman_host, username=args.capsman_user, password=args.capsman_pass, plaintext_login=True)
     api2 = pool2.get_api()
 
-    def graceful_exit(*_):
-        print("Shutting down...")
-        pool1.disconnect()
-        pool2.disconnect()
-        sys.exit(0)
-
-    signal.signal(signal.SIGTERM, graceful_exit)
-    signal.signal(signal.SIGINT, graceful_exit)
-
-    update_thread = threading.Thread(target=update_data, args=(api1, api2, args.update_interval), daemon=True)
+    update_thread = threading.Thread(target=periodic_update, args=(api1, api2, args.update_interval), daemon=True)
     update_thread.start()
 
     app = Flask(__name__)
 
     @app.route('/')
     def index():
+        with lock:  # блокируем на чтение, чтобы не было коллизий
+            data = list(merged)
         html = '''
         <html><head><title>WiFi Clients</title></head>
         <body>
@@ -159,8 +153,11 @@ def main():
         '''
         return render_template_string(html, data=merged)
 
-    app.run(host='0.0.0.0', port=8080)
-    graceful_exit()
+    try:
+        app.run(host='0.0.0.0', port=8080)
+    finally:
+        pool1.disconnect()
+        pool2.disconnect()
 
 if __name__ == '__main__':
     main()

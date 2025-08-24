@@ -3,6 +3,8 @@ from flask import Flask, render_template_string
 import os
 import argparse
 import threading
+import signal
+import sys
 import time
 
 merged = []  # здесь будут храниться актуальные данные
@@ -159,7 +161,7 @@ def main():
 
     app.run(host='0.0.0.0', port=8080)
     graceful_exit()
-    
+
 if __name__ == '__main__':
     main()
 

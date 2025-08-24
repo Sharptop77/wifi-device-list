@@ -126,10 +126,18 @@ def main():
     pool2 = RouterOsApiPool(args.capsman_host, username=args.capsman_user, password=args.capsman_pass, plaintext_login=True)
     api2 = pool2.get_api()
    
-    # Стартуем обновление в этом же процессе, ознакомив поток с объектами, созданными в главном потоке
-    update_thread = threading.Thread(target=periodic_update, args=(api1, api2, args.update_interval), daemon=True)
+
+    # Первый сбор данных до запуска Flask — чтобы была не пустая страница
+    update_once = True
+    if update_once:
+        dhcp_data = get_dhcp_leases(api1)
+        capsman_data = get_capsman_info(api2)
+        with lock:
+            merged[:] = merge_data(dhcp_data, capsman_data)
+
+    # Запускаем цикл автообновления в основном потоке (в фоне)
+    update_thread = threading.Thread(target=update_data_forever, args=(api1, api2, args.update_interval), daemon=True)
     update_thread.start()
-    app = Flask(__name__)
 
     @app.route('/')
     def index():
@@ -167,12 +175,16 @@ def main():
         '''
         return render_template_string(html, data=data)
 
-    try:
-        app.run(host='0.0.0.0', port=8080)
-    finally:
+    def shutdown(*_):
+        print("Disconnecting from routers...")
         pool1.disconnect()
         pool2.disconnect()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    app.run(host='0.0.0.0', port=8080, threaded=False)
 
 if __name__ == '__main__':
     main()
-

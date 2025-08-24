@@ -141,7 +141,9 @@ def main():
     # Запускаем цикл автообновления в основном потоке (в фоне)
     update_thread = threading.Thread(target=update_data_forever, args=(api1, api2, args.update_interval), daemon=True)
     update_thread.start()
-
+    
+    app = Flask(__name__)
+  
     @app.route('/')
     def index():
         with lock:  # блокируем на чтение, чтобы не было коллизий

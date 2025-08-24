@@ -9,7 +9,7 @@ import time
 
 merged = []  # здесь будут храниться актуальные данные
 
-def update_data(api1,api2,args):
+def update_data(api1,api2,update_interval):
     global merged
     while True:
         try:

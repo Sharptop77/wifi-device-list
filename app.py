@@ -1,10 +1,11 @@
-from routeros_api import RouterOsApiPool
-from flask import Flask, render_template_string
 import os
 import argparse
-import threading
-import sys
 import time
+import threading
+import signal
+import sys
+from flask import Flask, render_template_string
+from routeros_api import RouterOsApiPool
 
 merged = []  # здесь будут храниться актуальные данные
 lock = threading.Lock()
@@ -20,6 +21,19 @@ def periodic_update(api1, api2, update_interval):
         except Exception as e:
             print(f"Error updating  {e}")
         time.sleep(update_interval)
+
+def update_data_forever(api1, api2, interval):
+    global merged
+    while True:
+        try:
+            dhcp_data = get_dhcp_leases(api1)
+            capsman_data = get_capsman_info(api2)
+            with lock:
+                merged[:] = merge_data(dhcp_data, capsman_data)
+            print("WiFi list refreshed!")
+        except Exception as e:
+            print("Error in update_", e)
+        time.sleep(interval)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="MikroTik WiFi Info App")
@@ -111,10 +125,10 @@ def main():
     api1 = pool1.get_api()
     pool2 = RouterOsApiPool(args.capsman_host, username=args.capsman_user, password=args.capsman_pass, plaintext_login=True)
     api2 = pool2.get_api()
-
+   
+    # Стартуем обновление в этом же процессе, ознакомив поток с объектами, созданными в главном потоке
     update_thread = threading.Thread(target=periodic_update, args=(api1, api2, args.update_interval), daemon=True)
     update_thread.start()
-
     app = Flask(__name__)
 
     @app.route('/')
@@ -151,7 +165,7 @@ def main():
         </table>
         </body></html>
         '''
-        return render_template_string(html, data=merged)
+        return render_template_string(html, data=data)
 
     try:
         app.run(host='0.0.0.0', port=8080)

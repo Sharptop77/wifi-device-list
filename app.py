@@ -7,22 +7,16 @@ import time
 
 merged = []  # здесь будут храниться актуальные данные
 
-def update_data(args):
+def update_data(api1,api2,args):
     global merged
     while True:
         try:
-            pool1 = RouterOsApiPool(args.dhcp_host, username=args.dhcp_user, password=args.dhcp_pass, plaintext_login=True)
-            api1 = pool1.get_api()
             dhcp_data = get_dhcp_leases(api1)
-            pool2 = RouterOsApiPool(args.capsman_host, username=args.capsman_user, password=args.capsman_pass, plaintext_login=True)
-            api2 = pool2.get_api()
             capsman_data = get_capsman_info(api2)
-            pool1.disconnect()
-            pool2.disconnect()
             merged = merge_data(dhcp_data, capsman_data)
         except Exception as e:
             print(f"Error updating  {e}")
-        time.sleep(args.update_interval)
+        time.sleep(update_interval)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="MikroTik WiFi Info App")
@@ -79,7 +73,7 @@ def get_capsman_info(connection):
         ssid = client.get('ssid')
         signal = client.get('rx-signal')
         # Найдем инфо по точке доступа (ап)
-        ap_name = radio_info[ap_interface].get('remote-cap-identity')  # обычно имя интерфейса указывает точку доступа
+        ap_name = radio_info[ap_interface].get('remote-cap-identity')  
         ap_addr = ap_info[ap_name].get('address')
         client_info[mac] = {
             'ap_interface': ap_interface,
@@ -110,8 +104,21 @@ def merge_data(dhcp_data, capsman_data):
 # Запуск API и Flask сервера
 def main():
     args = parse_args()
+    pool1 = RouterOsApiPool(args.dhcp_host, username=args.dhcp_user, password=args.dhcp_pass, plaintext_login=True)
+    api1 = pool1.get_api()
+    pool2 = RouterOsApiPool(args.capsman_host, username=args.capsman_user, password=args.capsman_pass, plaintext_login=True)
+    api2 = pool2.get_api()
 
-    update_thread = threading.Thread(target=update_data, args=(args,), daemon=True)
+    def graceful_exit(*_):
+        print("Shutting down...")
+        pool1.disconnect()
+        pool2.disconnect()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, graceful_exit)
+    signal.signal(signal.SIGINT, graceful_exit)
+
+    update_thread = threading.Thread(target=update_data, args=(api1, api2, args.update_interval), daemon=True)
     update_thread.start()
 
     app = Flask(__name__)
@@ -151,7 +158,8 @@ def main():
         return render_template_string(html, data=merged)
 
     app.run(host='0.0.0.0', port=8080)
-
+    graceful_exit()
+    
 if __name__ == '__main__':
     main()
 

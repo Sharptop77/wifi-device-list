@@ -71,17 +71,19 @@ def get_dhcp_leases(connection):
 
 # Получаем данные с CAPsMAN контроллера (назначение клиентов к точкам доступа)
 def get_capsman_info(connection):
-    # Получим список клиентов capsman
+    # Получаем клиентов WiFi
     capsman_clients_res = connection.get_resource('/caps-man/registration-table')
     clients = capsman_clients_res.get()
-    # Получим список интерфейсов точек доступа для сопоставления
+    # Получаем radio info
     capsman_interface_res = connection.get_resource('/caps-man/radio')
     wireless_regs = capsman_interface_res.get()
-    # Для каждого клиента получим mac, интерфейс подключения (AP)
+    # Получаем remote CAP info
     capsman_points_res = connection.get_resource('/caps-man/remote-cap')
     wireless_aps = capsman_points_res.get()
-    radio_info = {ap['interface']: ap for ap in wireless_regs}
-    ap_info = {ap['identity']: ap for ap in wireless_aps}
+
+    # Построить словари для быстрого поиска
+    radio_info = {ap.get('interface'): ap for ap in wireless_regs if 'interface' in ap}
+    ap_info = {ap.get('identity'): ap for ap in wireless_aps if 'identity' in ap}
     
     client_info = {}
     for client in clients:
@@ -89,15 +91,16 @@ def get_capsman_info(connection):
         ap_interface = client.get('interface')
         ssid = client.get('ssid')
         signal = client.get('rx-signal')
-        # Найдем инфо по точке доступа (ап)
-        ap_name = radio_info[ap_interface].get('remote-cap-identity')  
-        ap_addr = ap_info[ap_name].get('address')
+
+        # Безопасный доступ к radio_info
+        ap_name = radio_info.get(ap_interface, {}).get('remote-cap-identity', '')
+        ap_addr = ap_info.get(ap_name, {}).get('address', '')
         client_info[mac] = {
-            'ap_interface': ap_interface,
-            'ap_name': ap_name,
-            'ap_address': ap_addr,
-            'ap_ssid': ssid,
-            'ap_signal': signal
+            'ap_interface': ap_interface or '',
+            'ap_name': ap_name or '',
+            'ap_address': ap_addr or '',
+            'ap_ssid': ssid or '',
+            'ap_signal': signal or ''
         }
     return client_info
 

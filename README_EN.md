@@ -17,6 +17,7 @@ The application supports periodic information updates with a configurable interv
 - Display information as an HTML table on a web page
 - Configurable data update interval (default 30 seconds)
 - Simple integration and running in a Docker container
+- JSON output (URL - /json)
 
 ***
 

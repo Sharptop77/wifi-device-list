@@ -4,7 +4,7 @@ import time
 import threading
 import signal
 import sys
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, jsonify
 from routeros_api import RouterOsApiPool
 
 merged = []  # здесь будут храниться актуальные данные
@@ -179,6 +179,13 @@ def main():
         </body></html>
         '''
         return render_template_string(html, data=data)
+
+   # -------- ДОБАВЛЕННЫЙ JSON ENDPOINT ----------
+    @app.route('/json')
+    def json_endpoint():
+        with lock:
+            data = list(merged)
+        return jsonify(data)
 
     def shutdown(*_):
         print("Disconnecting from routers...")
